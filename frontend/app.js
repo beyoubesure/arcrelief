@@ -1,17 +1,22 @@
 const ARC = {
-  chainIdHex: "0x4CEF52", // 5042002
+  chainIdHex: "0x4cef52",
   chainId: 5042002,
   rpcUrl: "https://rpc.testnet.arc.io",
   explorer: "https://testnet.arcscan.app",
   usdc: "0x3600000000000000000000000000000000000000"
 };
 
-let provider;
+let browserProvider;
 let signer;
 let userAddress;
-let relief;
-let usdc;
+let writeRelief;
+let writeUsdc;
 let connecting = false;
+
+const readProvider = new ethers.JsonRpcProvider(ARC.rpcUrl);
+const readRelief = contractConfigured()
+  ? new ethers.Contract(window.ARCRELIEF_ADDRESS, window.ARCRELIEF_ABI, readProvider)
+  : null;
 
 const el = (id) => document.getElementById(id);
 const activity = [];
@@ -36,12 +41,19 @@ function shortAddress(address) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
+function setDisconnectedUI() {
+  el("connectBtn").textContent = "Connect wallet";
+  el("networkPill").textContent = "Not connected";
+  el("walletBalance").textContent = "—";
+}
+
+function setConnectedUI() {
+  el("connectBtn").textContent = shortAddress(userAddress);
+  el("networkPill").textContent = "Arc Testnet · connected";
+}
+
 function addActivity(message, txHash) {
-  activity.unshift({
-    message,
-    txHash,
-    time: new Date()
-  });
+  activity.unshift({ message, txHash, time: new Date() });
   activity.splice(8);
   renderActivity();
 }
@@ -62,7 +74,10 @@ function renderActivity() {
   `).join("");
 }
 
-async function switchToArc() {
+async function ensureArcNetwork() {
+  const current = await window.ethereum.request({ method: "eth_chainId" });
+  if (String(current).toLowerCase() === ARC.chainIdHex) return;
+
   try {
     await window.ethereum.request({
       method: "wallet_switchEthereumChain",
@@ -88,68 +103,116 @@ async function switchToArc() {
   }
 }
 
-async function connect() {
-  if (connecting) return;
+async function establishWallet({ requestAccounts = true } = {}) {
+  if (!window.ethereum) {
+    throw new Error(
+      "No injected wallet detected. Open this page inside the MetaMask mobile browser."
+    );
+  }
+
+  if (connecting) {
+    // Wait briefly for an in-progress connection rather than starting a second request.
+    for (let i = 0; i < 20 && connecting; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (signer && writeRelief) return;
+  }
+
   connecting = true;
 
   try {
-    if (!window.ethereum) {
-      alert("Open this page inside MetaMask mobile browser or install an EVM wallet.");
-      return;
+    let accounts;
+    if (requestAccounts) {
+      accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    } else {
+      accounts = await window.ethereum.request({ method: "eth_accounts" });
+      if (!accounts || accounts.length === 0) return false;
     }
 
-    await window.ethereum.request({
-      method: "eth_requestAccounts"
-    });
+    if (!accounts || accounts.length === 0) {
+      throw new Error("Wallet returned no authorized account.");
+    }
 
-    await switchToArc();
+    await ensureArcNetwork();
 
-    provider = new ethers.BrowserProvider(window.ethereum);
-    signer = await provider.getSigner();
+    browserProvider = new ethers.BrowserProvider(window.ethereum, "any");
+    signer = await browserProvider.getSigner();
     userAddress = await signer.getAddress();
 
-    usdc = new ethers.Contract(ARC.usdc, window.USDC_ABI, signer);
+    writeUsdc = new ethers.Contract(ARC.usdc, window.USDC_ABI, signer);
 
-    if (contractConfigured()) {
-      relief = new ethers.Contract(
-        window.ARCRELIEF_ADDRESS,
-        window.ARCRELIEF_ABI,
-        signer
-      );
+    if (!contractConfigured()) {
+      throw new Error("ArcRelief contract address is not configured.");
     }
 
-    el("connectBtn").textContent = shortAddress(userAddress);
-    el("networkPill").textContent = "Arc Testnet · connected";
+    writeRelief = new ethers.Contract(
+      window.ARCRELIEF_ADDRESS,
+      window.ARCRELIEF_ABI,
+      signer
+    );
 
-    await refreshWalletBalance();
-    await refreshCampaigns();
-  } catch (err) {
-    console.error("Wallet connection failed:", err);
-    const message =
-      err?.shortMessage ||
-      err?.message ||
-      "Wallet connection failed.";
-    alert(message);
+    setConnectedUI();
+
+    // Balance display is useful but should never invalidate a successful wallet connection.
+    try {
+      const balance = await writeUsdc.balanceOf(userAddress);
+      el("walletBalance").textContent = `${formatUSDC(balance)} USDC`;
+    } catch (balanceError) {
+      console.warn("USDC balance display failed:", balanceError);
+      el("walletBalance").textContent = "Connected";
+    }
+
+    return true;
   } finally {
     connecting = false;
   }
 }
 
-async function refreshWalletBalance() {
-  if (!userAddress || !usdc) return;
-  const balance = await usdc.balanceOf(userAddress);
-  el("walletBalance").textContent = `${formatUSDC(balance)} USDC`;
+async function connect() {
+  try {
+    await establishWallet({ requestAccounts: true });
+    await refreshCampaigns();
+  } catch (err) {
+    console.error("Wallet connection failed:", err);
+    alert(err?.shortMessage || err?.message || "Wallet connection failed.");
+  }
 }
 
-function requireContract() {
-  if (!relief) {
-    alert("ArcRelief contract is not configured or wallet is not connected.");
-    throw new Error("CONTRACT_NOT_READY");
+async function ensureWritableWallet() {
+  if (signer && writeRelief && userAddress) {
+    // Verify the wallet is still on Arc and the account is still authorized.
+    const accounts = await window.ethereum.request({ method: "eth_accounts" });
+    const chainId = await window.ethereum.request({ method: "eth_chainId" });
+
+    if (
+      accounts?.length &&
+      accounts[0].toLowerCase() === userAddress.toLowerCase() &&
+      String(chainId).toLowerCase() === ARC.chainIdHex
+    ) {
+      return;
+    }
+  }
+
+  await establishWallet({ requestAccounts: true });
+
+  if (!signer || !writeRelief || !userAddress) {
+    throw new Error("Wallet connection was not completed.");
+  }
+}
+
+async function refreshWalletBalance() {
+  if (!userAddress || !writeUsdc) return;
+  try {
+    const balance = await writeUsdc.balanceOf(userAddress);
+    el("walletBalance").textContent = `${formatUSDC(balance)} USDC`;
+  } catch (err) {
+    console.warn("Wallet balance refresh failed:", err);
   }
 }
 
 async function submitTx(label, fn) {
   try {
+    await ensureWritableWallet();
     const tx = await fn();
     addActivity(`${label} submitted · `, tx.hash);
     const receipt = await tx.wait();
@@ -173,14 +236,13 @@ el("connectBtn").addEventListener("click", connect);
 
 el("createForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  requireContract();
 
   const title = el("campaignTitle").value.trim();
   const target = parseUSDC(el("campaignTarget").value);
   const metadata = el("metadataURI").value.trim();
 
   await submitTx("Create campaign", () =>
-    relief.createCampaign(title, target, metadata)
+    writeRelief.createCampaign(title, target, metadata)
   );
 
   event.target.reset();
@@ -188,24 +250,24 @@ el("createForm").addEventListener("submit", async (event) => {
 
 el("fundForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  requireContract();
+  await ensureWritableWallet();
 
   const campaignId = BigInt(el("fundCampaignId").value);
   const amount = parseUSDC(el("fundAmount").value);
 
-  const allowance = await usdc.allowance(
+  const allowance = await writeUsdc.allowance(
     userAddress,
     window.ARCRELIEF_ADDRESS
   );
 
   if (allowance < amount) {
     await submitTx("Approve USDC", () =>
-      usdc.approve(window.ARCRELIEF_ADDRESS, amount)
+      writeUsdc.approve(window.ARCRELIEF_ADDRESS, amount)
     );
   }
 
   await submitTx("Fund campaign", () =>
-    relief.fundCampaign(campaignId, amount)
+    writeRelief.fundCampaign(campaignId, amount)
   );
 
   event.target.reset();
@@ -213,7 +275,6 @@ el("fundForm").addEventListener("submit", async (event) => {
 
 el("recipientForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  requireContract();
 
   const campaignId = BigInt(el("recipientCampaignId").value);
   const account = el("recipientAddress").value.trim();
@@ -226,7 +287,7 @@ el("recipientForm").addEventListener("submit", async (event) => {
   }
 
   await submitTx("Add recipient", () =>
-    relief.addRecipient(campaignId, account, amount, label)
+    writeRelief.addRecipient(campaignId, account, amount, label)
   );
 
   event.target.reset();
@@ -234,22 +295,19 @@ el("recipientForm").addEventListener("submit", async (event) => {
 
 el("payoutForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  requireContract();
 
   const campaignId = BigInt(el("payoutCampaignId").value);
   const index = BigInt(el("recipientIndex").value);
 
   await submitTx("Recipient payout", () =>
-    relief.payoutRecipient(campaignId, index)
+    writeRelief.payoutRecipient(campaignId, index)
   );
 
   event.target.reset();
 });
 
-
 el("batchPayoutForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  requireContract();
 
   const campaignId = BigInt(el("batchCampaignId").value);
   const raw = el("batchIndices").value
@@ -282,22 +340,20 @@ el("batchPayoutForm").addEventListener("submit", async (event) => {
   }
 
   await submitTx("Batch payout", () =>
-    relief.payoutBatch(campaignId, indices)
+    writeRelief.payoutBatch(campaignId, indices)
   );
 
   event.target.reset();
 });
 
 el("closeCampaignBtn").addEventListener("click", async () => {
-  requireContract();
   const campaignId = BigInt(el("lifecycleCampaignId").value);
   await submitTx("Close campaign", () =>
-    relief.closeCampaign(campaignId)
+    writeRelief.closeCampaign(campaignId)
   );
 });
 
 el("cancelCampaignBtn").addEventListener("click", async () => {
-  requireContract();
   const campaignId = BigInt(el("lifecycleCampaignId").value);
 
   const confirmed = confirm(
@@ -306,30 +362,29 @@ el("cancelCampaignBtn").addEventListener("click", async () => {
   if (!confirmed) return;
 
   await submitTx("Cancel campaign", () =>
-    relief.cancelCampaign(campaignId)
+    writeRelief.cancelCampaign(campaignId)
   );
 });
 
 el("claimRefundBtn").addEventListener("click", async () => {
-  requireContract();
+  await ensureWritableWallet();
   const campaignId = BigInt(el("lifecycleCampaignId").value);
 
-  const amount = await relief.contributions(campaignId, userAddress);
+  const amount = await writeRelief.contributions(campaignId, userAddress);
   if (amount === 0n) {
     alert("This wallet has no recorded contribution to reclaim.");
     return;
   }
 
   await submitTx("Claim cancelled refund", () =>
-    relief.claimCancelledRefund(campaignId)
+    writeRelief.claimCancelledRefund(campaignId)
   );
 });
-
 
 el("refreshBtn").addEventListener("click", refreshCampaigns);
 
 async function refreshCampaigns() {
-  if (!contractConfigured()) {
+  if (!contractConfigured() || !readRelief) {
     el("setupWarning").classList.remove("hidden");
     el("campaignMetric").textContent = "—";
     el("campaigns").innerHTML =
@@ -339,17 +394,8 @@ async function refreshCampaigns() {
 
   el("setupWarning").classList.add("hidden");
 
-  if (!relief) {
-    const readProvider = new ethers.JsonRpcProvider(ARC.rpcUrl);
-    relief = new ethers.Contract(
-      window.ARCRELIEF_ADDRESS,
-      window.ARCRELIEF_ABI,
-      readProvider
-    );
-  }
-
   try {
-    const count = Number(await relief.campaignCount());
+    const count = Number(await readRelief.campaignCount());
     el("campaignMetric").textContent = count;
 
     if (!count) {
@@ -361,12 +407,12 @@ async function refreshCampaigns() {
     const campaigns = [];
 
     for (let id = count - 1; id >= Math.max(0, count - 10); id--) {
-      const c = await relief.getCampaign(id);
-      const recipientCount = Number(await relief.getRecipientCount(id));
+      const c = await readRelief.getCampaign(id);
+      const recipientCount = Number(await readRelief.getRecipientCount(id));
 
       const recipients = [];
       for (let i = 0; i < recipientCount; i++) {
-        recipients.push(await relief.getRecipient(id, i));
+        recipients.push(await readRelief.getRecipient(id, i));
       }
 
       campaigns.push({ id, c, recipients });
@@ -417,7 +463,7 @@ async function refreshCampaigns() {
   } catch (err) {
     console.error(err);
     el("campaigns").innerHTML =
-      '<div class="activity-item">Could not load campaigns. Check the configured contract address and Arc Testnet status.</div>';
+      '<div class="activity-item">Could not load campaigns. Check Arc Testnet RPC status.</div>';
   }
 }
 
@@ -430,38 +476,28 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-renderActivity();
-refreshCampaigns();
-
 async function reconnectIfAuthorized() {
   if (!window.ethereum || connecting) return;
 
   try {
-    const accounts = await window.ethereum.request({
-      method: "eth_accounts"
-    });
-
-    if (accounts.length > 0) {
-      await connect();
+    const accounts = await window.ethereum.request({ method: "eth_accounts" });
+    if (accounts?.length) {
+      await establishWallet({ requestAccounts: false });
     }
   } catch (err) {
-    console.warn("Automatic wallet reconnect skipped:", err);
+    console.warn("Automatic reconnect skipped:", err);
   }
 }
 
 if (window.ethereum) {
   window.ethereum.on?.("accountsChanged", async (accounts) => {
-    if (connecting) return;
+    signer = undefined;
+    writeRelief = undefined;
+    writeUsdc = undefined;
+    userAddress = undefined;
 
     if (!accounts || accounts.length === 0) {
-      provider = undefined;
-      signer = undefined;
-      userAddress = undefined;
-      relief = undefined;
-      usdc = undefined;
-      el("connectBtn").textContent = "Connect wallet";
-      el("networkPill").textContent = "Not connected";
-      el("walletBalance").textContent = "—";
+      setDisconnectedUI();
       return;
     }
 
@@ -469,9 +505,14 @@ if (window.ethereum) {
   });
 
   window.ethereum.on?.("chainChanged", async () => {
-    if (connecting) return;
+    signer = undefined;
+    writeRelief = undefined;
+    writeUsdc = undefined;
+    userAddress = undefined;
     await reconnectIfAuthorized();
   });
-
-  reconnectIfAuthorized();
 }
+
+renderActivity();
+refreshCampaigns();
+reconnectIfAuthorized();
