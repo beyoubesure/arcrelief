@@ -319,3 +319,4 @@ These rules keep the demo's treasury accounting easier to reason about and preve
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/DEPLOYMENT_CHECKLIST.md`](docs/DEPLOYMENT_CHECKLIST.md)
 - [`SECURITY.md`](SECURITY.md)
+Live demo deployment enabled.
