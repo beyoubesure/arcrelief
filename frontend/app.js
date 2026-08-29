@@ -11,6 +11,7 @@ let signer;
 let userAddress;
 let relief;
 let usdc;
+let connecting = false;
 
 const el = (id) => document.getElementById(id);
 const activity = [];
@@ -88,32 +89,50 @@ async function switchToArc() {
 }
 
 async function connect() {
-  if (!window.ethereum) {
-    alert("Install MetaMask or another EVM wallet first.");
-    return;
+  if (connecting) return;
+  connecting = true;
+
+  try {
+    if (!window.ethereum) {
+      alert("Open this page inside MetaMask mobile browser or install an EVM wallet.");
+      return;
+    }
+
+    await window.ethereum.request({
+      method: "eth_requestAccounts"
+    });
+
+    await switchToArc();
+
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    userAddress = await signer.getAddress();
+
+    usdc = new ethers.Contract(ARC.usdc, window.USDC_ABI, signer);
+
+    if (contractConfigured()) {
+      relief = new ethers.Contract(
+        window.ARCRELIEF_ADDRESS,
+        window.ARCRELIEF_ABI,
+        signer
+      );
+    }
+
+    el("connectBtn").textContent = shortAddress(userAddress);
+    el("networkPill").textContent = "Arc Testnet · connected";
+
+    await refreshWalletBalance();
+    await refreshCampaigns();
+  } catch (err) {
+    console.error("Wallet connection failed:", err);
+    const message =
+      err?.shortMessage ||
+      err?.message ||
+      "Wallet connection failed.";
+    alert(message);
+  } finally {
+    connecting = false;
   }
-
-  await switchToArc();
-
-  provider = new ethers.BrowserProvider(window.ethereum);
-  signer = await provider.getSigner();
-  userAddress = await signer.getAddress();
-
-  usdc = new ethers.Contract(ARC.usdc, window.USDC_ABI, signer);
-
-  if (contractConfigured()) {
-    relief = new ethers.Contract(
-      window.ARCRELIEF_ADDRESS,
-      window.ARCRELIEF_ABI,
-      signer
-    );
-  }
-
-  el("connectBtn").textContent = shortAddress(userAddress);
-  el("networkPill").textContent = "Arc Testnet · connected";
-
-  await refreshWalletBalance();
-  await refreshCampaigns();
 }
 
 async function refreshWalletBalance() {
@@ -414,7 +433,45 @@ function escapeHtml(value) {
 renderActivity();
 refreshCampaigns();
 
+async function reconnectIfAuthorized() {
+  if (!window.ethereum || connecting) return;
+
+  try {
+    const accounts = await window.ethereum.request({
+      method: "eth_accounts"
+    });
+
+    if (accounts.length > 0) {
+      await connect();
+    }
+  } catch (err) {
+    console.warn("Automatic wallet reconnect skipped:", err);
+  }
+}
+
 if (window.ethereum) {
-  window.ethereum.on?.("accountsChanged", () => location.reload());
-  window.ethereum.on?.("chainChanged", () => location.reload());
+  window.ethereum.on?.("accountsChanged", async (accounts) => {
+    if (connecting) return;
+
+    if (!accounts || accounts.length === 0) {
+      provider = undefined;
+      signer = undefined;
+      userAddress = undefined;
+      relief = undefined;
+      usdc = undefined;
+      el("connectBtn").textContent = "Connect wallet";
+      el("networkPill").textContent = "Not connected";
+      el("walletBalance").textContent = "—";
+      return;
+    }
+
+    await reconnectIfAuthorized();
+  });
+
+  window.ethereum.on?.("chainChanged", async () => {
+    if (connecting) return;
+    await reconnectIfAuthorized();
+  });
+
+  reconnectIfAuthorized();
 }
