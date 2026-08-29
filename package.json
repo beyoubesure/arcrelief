@@ -1,0 +1,20 @@
+{
+  "name": "arcrelief",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Transparent USDC emergency disbursement prototype built on Arc Testnet.",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy:testnet": "hardhat run scripts/deploy.js --network arcTestnet",
+    "serve": "npx http-server frontend -p 8080",
+    "smoke:testnet": "hardhat run scripts/smoke.js --network arcTestnet",
+    "test": "hardhat test",
+    "check": "npm run compile && npm test && node --check frontend/app.js && node --check frontend/abi.js && node --check frontend/config.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.22.10",
+    "http-server": "^14.1.1"
+  }
+}

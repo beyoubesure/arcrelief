@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArcRelief</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">ARC TESTNET EXPERIMENT</div>
+      <h1>ArcRelief</h1>
+      <p>Transparent USDC disbursement infrastructure for emergency funding.</p>
+    </div>
+    <div class="wallet-area">
+      <span id="networkPill" class="pill">Not connected</span>
+      <button id="connectBtn">Connect wallet</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero card">
+      <div>
+        <span class="pill accent">Stablecoin-native</span>
+        <h2>Fund once. Disburse transparently.</h2>
+        <p>
+          ArcRelief explores how Arc's native USDC environment can support transparent,
+          multi-recipient treasury workflows with onchain payout history.
+        </p>
+      </div>
+      <div class="hero-metrics">
+        <div><span>Campaigns</span><strong id="campaignMetric">—</strong></div>
+        <div><span>Wallet USDC</span><strong id="walletBalance">—</strong></div>
+        <div><span>Chain</span><strong>Arc Testnet</strong></div>
+      </div>
+    </section>
+
+    <section id="setupWarning" class="warning hidden">
+      Contract address is not configured yet. Deploy ArcRelief, then paste the address into <code>frontend/config.js</code>.
+    </section>
+
+    <section class="grid two">
+      <article class="card">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">01 · CREATE</div>
+            <h3>Create campaign</h3>
+          </div>
+        </div>
+        <form id="createForm" class="form">
+          <label>Campaign title<input id="campaignTitle" maxlength="80" placeholder="Emergency supply distribution" required /></label>
+          <label>Target amount (USDC)<input id="campaignTarget" type="number" min="0.01" step="0.01" placeholder="100" required /></label>
+          <label>Metadata URL / note<input id="metadataURI" placeholder="ipfs://... or project note" /></label>
+          <button type="submit">Create on Arc</button>
+        </form>
+      </article>
+
+      <article class="card">
+        <div class="eyebrow">02 · FUND</div>
+        <h3>Fund campaign</h3>
+        <form id="fundForm" class="form">
+          <label>Campaign ID<input id="fundCampaignId" type="number" min="0" required /></label>
+          <label>Amount (USDC)<input id="fundAmount" type="number" min="0.01" step="0.01" required /></label>
+          <button type="submit">Approve & fund</button>
+        </form>
+        <p class="hint">Uses Arc native USDC's ERC-20 interface for allowance and <code>transferFrom</code>.</p>
+      </article>
+    </section>
+
+    <section class="grid two">
+      <article class="card">
+        <div class="eyebrow">03 · ALLOCATE</div>
+        <h3>Add recipient</h3>
+        <form id="recipientForm" class="form">
+          <label>Campaign ID<input id="recipientCampaignId" type="number" min="0" required /></label>
+          <label>Recipient wallet<input id="recipientAddress" placeholder="0x..." required /></label>
+          <label>Allocation (USDC)<input id="recipientAmount" type="number" min="0.01" step="0.01" required /></label>
+          <label>Label<input id="recipientLabel" placeholder="Local pharmacy / household / supplier" /></label>
+          <button type="submit">Add recipient</button>
+        </form>
+      </article>
+
+      <article class="card">
+        <div class="eyebrow">04 · PAYOUT</div>
+        <h3>Disburse allocation</h3>
+        <form id="payoutForm" class="form">
+          <label>Campaign ID<input id="payoutCampaignId" type="number" min="0" required /></label>
+          <label>Recipient index<input id="recipientIndex" type="number" min="0" required /></label>
+          <button type="submit">Send payout</button>
+        </form>
+        <p class="hint">Only the campaign organizer can trigger a payout.</p>
+      </article>
+    </section>
+
+
+    <section class="grid two">
+      <article class="card">
+        <div class="eyebrow">05 · BATCH</div>
+        <h3>Batch payout</h3>
+        <form id="batchPayoutForm" class="form">
+          <label>Campaign ID<input id="batchCampaignId" type="number" min="0" required /></label>
+          <label>Recipient indices<input id="batchIndices" placeholder="0,1,2" required /></label>
+          <button type="submit">Send batch payout</button>
+        </form>
+        <p class="hint">All selected payouts execute atomically in a single transaction.</p>
+      </article>
+
+      <article class="card">
+        <div class="eyebrow">06 · LIFECYCLE</div>
+        <h3>Campaign controls</h3>
+        <form id="lifecycleForm" class="form">
+          <label>Campaign ID<input id="lifecycleCampaignId" type="number" min="0" required /></label>
+          <div class="button-grid">
+            <button type="button" id="closeCampaignBtn">Close settled campaign</button>
+            <button type="button" id="cancelCampaignBtn" class="secondary">Cancel before payout</button>
+            <button type="button" id="claimRefundBtn" class="secondary">Claim my cancelled refund</button>
+          </div>
+        </form>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">ONCHAIN VIEW</div>
+          <h3>Campaign explorer</h3>
+        </div>
+        <button id="refreshBtn" class="secondary">Refresh</button>
+      </div>
+      <div id="campaigns" class="campaigns"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">TRANSACTION LOG</div>
+          <h3>Recent actions</h3>
+        </div>
+      </div>
+      <div id="activity" class="activity"></div>
+    </section>
+
+    <footer>
+      Experimental Arc Testnet project · Not audited · No real funds
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.min.js"></script>
+  <script src="config.js"></script>
+  <script src="abi.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
