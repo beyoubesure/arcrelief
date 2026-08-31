@@ -33,14 +33,14 @@ The project is not affiliated with Circle and is not a production aid platform.
 
 ### Smart contract
 - Create independent relief campaigns
-- Set a USDC funding target
+- Set an informational USDC funding target (not a hard cap or closure condition)
 - Register recipient allocations
 - Batch-add up to 50 recipients
 - Fund campaigns through USDC `approve` + `transferFrom`
 - Pay individual recipients
 - Batch payout support (contract + frontend)
 - Campaign-level accounting
-- Close a completed campaign
+- Close a campaign once its accounted funded balance has been fully distributed
 - Pre-payout campaign cancellation with contributor-owned refunds
 - Contributor refund claims after pre-payout cancellation
 - Onchain events for campaigns, funding, allocation, and payout
@@ -129,7 +129,9 @@ Test USDC is available from Circle Faucet.
 - **Arcscan:** https://testnet.arcscan.app/address/0xc22A601f248c21fEAB92B9654c37bD484D2c92b9
 - **Network:** Arc Testnet (`5042002`)
 
-The live demo is deployed separately through GitHub Pages from the `frontend/` directory.
+**Live demo:** https://beyoubesure.github.io/arcrelief/
+
+The demo is deployed through GitHub Pages from the `frontend/` directory.
 
 
 ## Quick start
@@ -143,7 +145,7 @@ Install a current Node.js LTS release.
 From the repository folder:
 
 ```bash
-npm install
+npm ci
 ```
 
 ### 3. Compile
@@ -247,8 +249,11 @@ The tests cover:
 - contributor-owned refunds
 - double-refund prevention
 - close-with-undistributed-funds prevention
-- fully settled campaign closure
-- batch-size limits
+- accounted-balance settlement and below-target closure semantics
+- recipient/payout batch-size and malformed-batch limits
+- cross-campaign accounting isolation
+- duplicate batch-index atomic reverts
+- lifecycle restrictions after closure
 
 For a full local preflight:
 
@@ -261,13 +266,13 @@ npm run check
 Use two or more Arc Testnet wallets.
 
 1. Connect the organizer wallet.
-2. Create a campaign with a target of `10 USDC`.
+2. Create a campaign with a target of `2 USDC`.
 3. Add two recipient wallets with allocations of `1 USDC` each.
 4. Fund the campaign with `2 USDC`.
-5. Trigger each payout.
-6. Confirm the recipient status changes from `Pending` to `Paid`.
-7. Open the generated Arcscan transaction links.
-8. Show that the campaign's `distributedAmount` increased onchain.
+5. Run one batch payout for recipient indices `0,1`.
+6. Confirm both recipients change from `Pending` to `Paid` and `distributedAmount` becomes `2 USDC`.
+7. Close the fully accounted campaign.
+8. Verify the payout transfers and `closeCampaign` transaction independently on Arcscan.
 
 ## Security notes
 
@@ -287,6 +292,14 @@ Production versions should add, among other things:
 - data/privacy review for any real humanitarian deployment
 
 No sensitive personal or medical data should be written directly onchain.
+
+Important prototype semantics:
+
+- The organizer controls recipient selection, payout timing, and whether an Active pre-payout campaign is cancelled.
+- Contributors cannot unilaterally withdraw while a campaign is Active. After organizer-triggered cancellation, each contributor can reclaim only their own recorded contribution.
+- `targetAmount` is informational. Funding may remain below or exceed the target, and closure depends on `fundedAmount == distributedAmount`, not on reaching the target.
+- `Recent actions` in the frontend is browser-session-local; durable transaction history is available through Arcscan and contract events.
+- The contract uses pooled USDC custody with campaign-level internal accounting. Unsolicited direct transfers are not assigned to a campaign.
 
 ## Possible next iterations
 
@@ -308,15 +321,15 @@ I started experimenting with Arc through smaller payment and escrow prototypes. 
 
 The current version deliberately constrains campaign cancellation:
 
-- a campaign can only be cancelled before any payout has started;
-- third-party contributors reclaim their own deposits with `claimCancelledRefund()`;
-- organizers cannot close a campaign while an undistributed accounting balance remains.
+- a campaign can only be cancelled by its organizer before any payout has started;
+- after cancellation, each contributor reclaims only their own recorded deposit with `claimCancelledRefund()`;
+- organizers cannot close a campaign while an undistributed accounting balance remains;
+- `targetAmount` is an informational goal and is not required to be reached before closure.
 
-These rules keep the demo's treasury accounting easier to reason about and prevent a cancelled third-party contribution from being redirected to the organizer.
+These rules keep the demo's treasury accounting easier to reason about and prevent a cancelled third-party contribution from being redirected to the organizer. On a cancelled campaign, `fundedAmount` decreases as refunds are claimed, so it represents the remaining refundable accounting balance rather than immutable historical gross funding.
 
 ## Additional documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/DEPLOYMENT_CHECKLIST.md`](docs/DEPLOYMENT_CHECKLIST.md)
 - [`SECURITY.md`](SECURITY.md)
-Live demo deployment enabled.
