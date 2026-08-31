@@ -9,6 +9,10 @@ describe("ArcRelief", function () {
   let relief, usdc;
 
   beforeEach(async function () {
+    // Arc's USDC interface lives at a fixed address. Reset Hardhat before
+    // injecting MockUSDC code so storage cannot leak between test cases.
+    await network.provider.send("hardhat_reset");
+
     [organizer, funder, recipientA, recipientB] = await ethers.getSigners();
 
     const MockUSDC = await ethers.getContractFactory("MockUSDC");
@@ -19,7 +23,6 @@ describe("ArcRelief", function () {
     await network.provider.send("hardhat_setCode", [USDC, runtimeCode]);
 
     usdc = await ethers.getContractAt("MockUSDC", USDC);
-
     await usdc.mint(organizer.address, u(1000));
     await usdc.mint(funder.address, u(1000));
 
@@ -28,10 +31,10 @@ describe("ArcRelief", function () {
     await relief.waitForDeployment();
   });
 
-  async function createBasicCampaign() {
+  async function createBasicCampaign(target = u(100)) {
     await relief.connect(organizer).createCampaign(
       "Emergency distribution",
-      u(100),
+      target,
       "test metadata"
     );
   }
@@ -44,7 +47,6 @@ describe("ArcRelief", function () {
   it("creates a campaign with correct initial state", async function () {
     await createBasicCampaign();
     const c = await relief.getCampaign(0);
-
     expect(c.organizer).to.equal(organizer.address);
     expect(c.targetAmount).to.equal(u(100));
     expect(c.fundedAmount).to.equal(0);
@@ -62,9 +64,20 @@ describe("ArcRelief", function () {
     ).to.be.revertedWith("INVALID_TARGET");
   });
 
-  it("tracks third-party contributions independently", async function () {
+  it("rejects zero recipient addresses and zero allocations", async function () {
     await createBasicCampaign();
 
+    await expect(
+      relief.connect(organizer).addRecipient(0, ethers.ZeroAddress, u(1), "A")
+    ).to.be.revertedWith("ZERO_RECIPIENT");
+
+    await expect(
+      relief.connect(organizer).addRecipient(0, recipientA.address, 0, "A")
+    ).to.be.revertedWith("INVALID_ALLOCATION");
+  });
+
+  it("tracks third-party contributions independently", async function () {
+    await createBasicCampaign();
     await fund(organizer, 0, u(10));
     await fund(funder, 0, u(15));
 
@@ -73,6 +86,24 @@ describe("ArcRelief", function () {
 
     const c = await relief.getCampaign(0);
     expect(c.fundedAmount).to.equal(u(25));
+  });
+
+  it("does not let one campaign spend another campaign's accounting balance", async function () {
+    await createBasicCampaign();
+    await relief.connect(organizer).createCampaign("Second", u(100), "");
+
+    await relief.connect(organizer).addRecipient(0, recipientA.address, u(2), "A");
+    await fund(organizer, 0, u(1));
+    await fund(organizer, 1, u(10));
+
+    // The contract physically holds 11 USDC, but campaign 0 only owns 1 USDC
+    // in accounting terms and therefore cannot pay a 2 USDC allocation.
+    await expect(
+      relief.connect(organizer).payoutRecipient(0, 0)
+    ).to.be.revertedWith("INSUFFICIENT_CAMPAIGN_FUNDS");
+
+    expect(await relief.getCampaignAvailableBalance(0)).to.equal(u(1));
+    expect(await relief.getCampaignAvailableBalance(1)).to.equal(u(10));
   });
 
   it("only organizer can add recipients or pay them", async function () {
@@ -87,6 +118,18 @@ describe("ArcRelief", function () {
 
     await expect(
       relief.connect(funder).payoutRecipient(0, 0)
+    ).to.be.revertedWith("NOT_ORGANIZER");
+  });
+
+  it("only organizer can close or cancel a campaign", async function () {
+    await createBasicCampaign();
+
+    await expect(
+      relief.connect(funder).closeCampaign(0)
+    ).to.be.revertedWith("NOT_ORGANIZER");
+
+    await expect(
+      relief.connect(funder).cancelCampaign(0)
     ).to.be.revertedWith("NOT_ORGANIZER");
   });
 
@@ -144,6 +187,53 @@ describe("ArcRelief", function () {
     expect(c.distributedAmount).to.equal(u(7));
   });
 
+  it("reverts a duplicate batch index atomically", async function () {
+    await createBasicCampaign();
+    await relief.connect(organizer).addRecipient(0, recipientA.address, u(3), "A");
+    await fund(organizer, 0, u(3));
+
+    const before = await usdc.balanceOf(recipientA.address);
+
+    await expect(
+      relief.connect(organizer).payoutBatch(0, [0, 0])
+    ).to.be.revertedWith("ALREADY_PAID");
+
+    const after = await usdc.balanceOf(recipientA.address);
+    expect(after - before).to.equal(0);
+
+    const c = await relief.getCampaign(0);
+    expect(c.distributedAmount).to.equal(0);
+  });
+
+  it("rejects malformed recipient batches", async function () {
+    await createBasicCampaign();
+
+    await expect(
+      relief.connect(organizer).addRecipients(
+        0,
+        [recipientA.address],
+        [u(1), u(2)],
+        ["A"]
+      )
+    ).to.be.revertedWith("LENGTH_MISMATCH");
+  });
+
+  it("enforces recipient and payout batch size limits", async function () {
+    await createBasicCampaign();
+
+    const accounts = Array(51).fill(recipientA.address);
+    const allocations = Array(51).fill(u(1));
+    const labels = Array(51).fill("R");
+
+    await expect(
+      relief.connect(organizer).addRecipients(0, accounts, allocations, labels)
+    ).to.be.revertedWith("INVALID_BATCH");
+
+    await expect(
+      relief.connect(organizer).payoutBatch(0, Array(51).fill(0))
+    ).to.be.revertedWith("INVALID_BATCH");
+  });
+
   it("cannot cancel after any payout", async function () {
     await createBasicCampaign();
     await relief.connect(organizer).addRecipient(0, recipientA.address, u(1), "A");
@@ -177,6 +267,18 @@ describe("ArcRelief", function () {
     expect(c.fundedAmount).to.equal(0);
   });
 
+  it("does not let a wallet claim another contributor's cancelled deposit", async function () {
+    await createBasicCampaign();
+    await fund(funder, 0, u(5));
+    await relief.connect(organizer).cancelCampaign(0);
+
+    await expect(
+      relief.connect(recipientA).claimCancelledRefund(0)
+    ).to.be.revertedWith("NO_REFUND");
+
+    expect(await relief.contributions(0, funder.address)).to.equal(u(5));
+  });
+
   it("does not allow a contributor to claim a cancelled refund twice", async function () {
     await createBasicCampaign();
     await fund(funder, 0, u(5));
@@ -197,6 +299,20 @@ describe("ArcRelief", function () {
     ).to.be.revertedWith("UNDISTRIBUTED_FUNDS");
   });
 
+  it("treats targetAmount as informational for settlement", async function () {
+    await createBasicCampaign(u(100));
+    await relief.connect(organizer).addRecipient(0, recipientA.address, u(1), "A");
+    await fund(organizer, 0, u(1));
+    await relief.connect(organizer).payoutRecipient(0, 0);
+    await relief.connect(organizer).closeCampaign(0);
+
+    const c = await relief.getCampaign(0);
+    expect(c.targetAmount).to.equal(u(100));
+    expect(c.fundedAmount).to.equal(u(1));
+    expect(c.distributedAmount).to.equal(u(1));
+    expect(c.status).to.equal(1);
+  });
+
   it("can close a fully settled campaign", async function () {
     await createBasicCampaign();
     await relief.connect(organizer).addRecipient(0, recipientA.address, u(1), "A");
@@ -208,15 +324,22 @@ describe("ArcRelief", function () {
     expect(c.status).to.equal(1);
   });
 
-  it("enforces the recipient batch size limit", async function () {
+  it("blocks state-changing campaign operations after closure", async function () {
     await createBasicCampaign();
+    await relief.connect(organizer).closeCampaign(0);
 
-    const accounts = Array(51).fill(recipientA.address);
-    const allocations = Array(51).fill(u(1));
-    const labels = Array(51).fill("R");
+    await usdc.connect(organizer).approve(await relief.getAddress(), u(1));
 
     await expect(
-      relief.connect(organizer).addRecipients(0, accounts, allocations, labels)
-    ).to.be.revertedWith("INVALID_BATCH");
+      relief.connect(organizer).fundCampaign(0, u(1))
+    ).to.be.revertedWith("CAMPAIGN_NOT_ACTIVE");
+
+    await expect(
+      relief.connect(organizer).addRecipient(0, recipientA.address, u(1), "A")
+    ).to.be.revertedWith("CAMPAIGN_NOT_ACTIVE");
+
+    await expect(
+      relief.connect(organizer).cancelCampaign(0)
+    ).to.be.revertedWith("CAMPAIGN_NOT_ACTIVE");
   });
 });
