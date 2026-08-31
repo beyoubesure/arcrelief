@@ -17,6 +17,15 @@ jobs:
         with:
           node-version: 20
 
+      - name: Reject tracked private env files
+        run: |
+          tracked_env="$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$' || true)"
+          if [ -n "$tracked_env" ]; then
+            echo "Private env file(s) must never be committed:"
+            echo "$tracked_env"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
 
@@ -31,3 +40,11 @@ jobs:
           node --check frontend/app.js
           node --check frontend/abi.js
           node --check frontend/config.js
+
+      - name: Check browser Ethers bundle
+        run: |
+          grep -Fq "ethers.umd.min.js" frontend/index.html
+          if grep -Fq "/ethers.min.js" frontend/index.html; then
+            echo "Use the Ethers UMD browser bundle, not the ESM bundle with a classic script tag."
+            exit 1
+          fi
