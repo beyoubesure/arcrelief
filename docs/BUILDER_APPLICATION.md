@@ -14,15 +14,15 @@ Use this only after the repository is public and the contract has actually been 
 
 I’m a medical student in South Korea who has been exploring Web3, DeFi, and onchain financial infrastructure through hands-on projects. I’ve been building on Arc to understand its stablecoin-native architecture in practice, starting with small payment and escrow experiments and now developing ArcRelief, a transparent USDC disbursement prototype on Arc Testnet.
 
-GitHub: [ADD_GITHUB_PROFILE]
+GitHub: https://github.com/beyoubesure
 
 ## “What specifically have you built?” draft
 
-I built ArcRelief, an Arc Testnet prototype for transparent multi-recipient USDC disbursement. It includes a Solidity treasury contract, campaign-level accounting, recipient allocation, individual and batch payouts, contributor-safe cancellation/refunds, wallet integration, live contract-state reads, and Arcscan transaction links.
+I built ArcRelief, an Arc Testnet prototype for transparent multi-recipient USDC disbursement. It includes a Solidity treasury contract, campaign-level accounting, recipient allocation, individual and batch payouts, contributor-owned refund claims after organizer-triggered pre-payout cancellation, wallet integration, live contract-state reads, and Arcscan transaction links.
 
-Repo: [ADD_REPO_URL]
-Demo: [ADD_LIVE_DEMO_URL]
-Contract: [ADD_ARCSCAN_CONTRACT_URL]
+Repo: https://github.com/beyoubesure/arcrelief
+Demo: https://beyoubesure.github.io/arcrelief/
+Contract: https://testnet.arcscan.app/address/0xc22A601f248c21fEAB92B9654c37bD484D2c92b9
 
 I also built smaller Arc experiments around USDC payment links and escrow while learning the stack.
 

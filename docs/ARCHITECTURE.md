@@ -19,9 +19,11 @@ For each campaign:
 
 - `distributedAmount <= fundedAmount`
 - A recipient can never receive more than its allocation.
-- A closed campaign must have no undistributed accounting balance.
+- A closed campaign must have no undistributed accounting balance (`fundedAmount == distributedAmount`).
+- `targetAmount` is an informational goal, not a hard funding cap or settlement condition.
 - Cancellation is only available before the first payout.
-- On cancellation, contributors claim their own deposits rather than allowing the organizer to receive third-party deposits.
+- On organizer-triggered pre-payout cancellation, contributors claim their own deposits rather than allowing the organizer to receive third-party deposits.
+- Contributors do not have a unilateral withdrawal path while a campaign remains Active.
 
 These constraints are intentional safeguards for the prototype.
 
